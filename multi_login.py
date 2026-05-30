@@ -573,7 +573,7 @@ async def main():
     auth_bot = TelegramAuthBot()
     await auth_bot.setup()
 
-    config = uvicorn.Config(app, host="0.0.0.0", port=8000, log_level="warning")
+    config = uvicorn.Config(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)), log_level="warning")
     server = uvicorn.Server(config)
 
     await asyncio.gather(
