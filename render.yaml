@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: telegram-multi-login
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python multi_login.py
+    plan: free

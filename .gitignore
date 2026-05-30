@@ -1,0 +1,8 @@
+sessions/
+vars.txt
+phones.txt
+*.session
+*.session-journal
+__pycache__/
+*.pyc
+.env
