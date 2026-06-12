@@ -5,8 +5,9 @@ Telegram Login Tool - Bot + FastAPI
 import asyncio
 import re
 import os
-import pickle
 import pathlib
+import pickle
+import datetime
 
 from telethon import TelegramClient, events
 from telethon.sessions import MemorySession
@@ -41,44 +42,75 @@ class TelegramAuthBot:
         return TelegramClient(self.session_name(phone), api_id, api_hash)
 
     def save_account_metadata(self, phone, api_id=API_ID, api_hash=API_HASH, vars_path: str = VARS_FILE):
-        with open(vars_path, 'ab') as f:
-            pickle.dump([api_id, api_hash, phone], f)
+        with open(vars_path, 'a') as f:
+            f.write(f"{api_id}|{api_hash}|{phone}\n")
+
+    def _read_vars_records(self, vars_path: str):
+        """Read account records from vars.txt, supporting both text and legacy pickle formats."""
+        records = []
+        # Try text format first (api_id|api_hash|phone per line)
+        try:
+            with open(vars_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split('|', 2)
+                    if len(parts) == 3:
+                        records.append(tuple(parts))
+                    else:
+                        print(f"[-] Skipping malformed line: {line!r}")
+            if records:
+                return records
+        except (UnicodeDecodeError, ValueError):
+            pass  # fall through to pickle
+
+        # Fall back to legacy pickle format and migrate in-place
+        print("[*] Detected legacy pickle format in vars.txt — migrating to text format...")
+        with open(vars_path, 'rb') as f:
+            while True:
+                try:
+                    api_id, api_hash, phone = pickle.load(f)
+                    records.append((str(api_id), api_hash, phone))
+                except EOFError:
+                    break
+        if records:
+            with open(vars_path, 'w') as f:
+                for api_id, api_hash, phone in records:
+                    f.write(f"{api_id}|{api_hash}|{phone}\n")
+            print(f"[*] Migrated {len(records)} record(s) to text format.")
+        return records
 
     async def load_saved_sessions(self, vars_path: str = VARS_FILE):
-        """Reload all authorized sessions stored as pickle records in vars.txt."""
+        """Reload all authorized sessions stored in vars.txt."""
         loaded = 0
-
         try:
-            with open(vars_path, 'rb') as f:
-                while True:
-                    try:
-                        api_id, api_hash, phone = pickle.load(f)
-                    except EOFError:
-                        break
-
-                    try:
-                        client = self.create_user_client(phone, int(api_id), api_hash)
-                        await client.connect()
-
-                        if await client.is_user_authorized():
-                            old_client = self.sessions.get(phone)
-                            if old_client:
-                                await old_client.disconnect()
-                            self.sessions[phone] = client
-                            loaded += 1
-                            print(f"[+] Successfully reloaded session for {phone}")
-                        else:
-                            await client.disconnect()
-                            print(f"[-] Session file for {phone} exists but is no longer authorized.")
-                    except Exception as e:
-                        print(f"[-] Failed to load session for {phone}: {str(e)}")
-
-            print(f"[*] Loaded {loaded} saved authorized session(s).")
-
+            records = self._read_vars_records(vars_path)
         except FileNotFoundError:
             print(f"[-] {vars_path} not found. No previous sessions to load.")
+            return
         except Exception as e:
-            print(f"[-] Error loading saved sessions: {str(e)}")
+            print(f"[-] Error reading {vars_path}: {str(e)}")
+            return
+
+        for api_id, api_hash, phone in records:
+            try:
+                client = self.create_user_client(phone, int(api_id), api_hash)
+                await client.connect()
+                if await client.is_user_authorized():
+                    old_client = self.sessions.get(phone)
+                    if old_client:
+                        await old_client.disconnect()
+                    self.sessions[phone] = client
+                    loaded += 1
+                    print(f"[+] Successfully reloaded session for {phone}")
+                else:
+                    await client.disconnect()
+                    print(f"[-] Session for {phone} exists but is no longer authorized.")
+            except Exception as e:
+                print(f"[-] Failed to load session for {phone}: {str(e)}")
+
+        print(f"[*] Loaded {loaded} saved authorized session(s).")
 
     async def setup(self):
         await self.bot.start(bot_token=BOT_TOKEN)
@@ -476,6 +508,43 @@ async def api_sessions():
         "active": list(auth_bot.sessions.keys()),
         "pending": list(auth_bot.pending_codes.keys()),
     }
+
+
+@app.get(
+    "/otp/{phone}",
+    summary="Fetch OTP messages",
+    description=(
+        "Returns recent messages from Telegram's OTP sender (777000) for the given phone number. "
+        "Use `since_seconds` to restrict to messages received in the last N seconds (default 300 = last 5 min). "
+        "Use `limit` to control how many messages to return (default 5)."
+    ),
+)
+async def get_otp(
+    phone: str,
+    limit: int = 5,
+    since_seconds: int = 300,
+):
+    if phone not in auth_bot.sessions:
+        raise HTTPException(404, "No active session for this number. Login first via /login.")
+
+    client = auth_bot.sessions[phone]
+    try:
+        cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=since_seconds)
+        messages = await client.get_messages(777000, limit=limit)
+        results = []
+        for msg in messages:
+            if msg.date < cutoff:
+                continue
+            ist = msg.date + datetime.timedelta(hours=5, minutes=30)
+            results.append({
+                "id": msg.id,
+                "text": msg.message,
+                "received_at_ist": ist.strftime("%d-%m-%Y %H:%M:%S"),
+                "received_at_utc": msg.date.strftime("%d-%m-%Y %H:%M:%S"),
+            })
+        return {"phone": phone, "count": len(results), "messages": results}
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 @app.get("/session/{phone}")
